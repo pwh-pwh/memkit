@@ -18,6 +18,7 @@ memkit is a lightweight and efficient memory framework written in Go, designed f
 - 🧭 **Maps Parsing + Range Tags**: Parse `/proc/<pid>/maps`, classify ranges (heap/stack/java/etc.).
 - 🔎 **Search Toolkit**: Bytes/AOB search, typed number search, and range filters.
 - 🚀 **Concurrent Scanning**: Worker-based scanning with progress callbacks.
+- 🧩 **Advanced Tooling**: Pagemap support, pointer chain search, AOB patching, fuzzy scan.
 
 ---
 
@@ -27,6 +28,8 @@ memkit is a lightweight and efficient memory framework written in Go, designed f
 - Parse and filter memory maps; query module base addresses
 - Search values/patterns; refine results; set operations on result sets
 - Resolve pointer chains for dynamic addresses
+- Pagemap lookup (virtual -> physical) where permitted
+- Save/load scan results (JSON/CSV)
 
 ---
 
@@ -63,6 +66,12 @@ func main() {
     _ = addrs
 }
 ```
+
+---
+
+## 📌 Release
+
+- `v0.5.0`: pagemap, pointer-chain search, AOB patch, fuzzy scan, sliding search, result persistence.
 
 ---
 
