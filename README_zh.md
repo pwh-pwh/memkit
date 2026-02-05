@@ -10,19 +10,21 @@ memkit 是一个用 Go 语言编写的安卓内存操作框架。它旨在为开
 
 ## ✨ 特性
 
-- 🟦 **纯 Go 实现**：无需依赖其他语言或复杂环境，易于集成和部署。
-- 📱 **安卓支持**：专为安卓平台设计，兼容主流设备和系统版本。
-- ⚡ **高效性能**：针对移动设备优化，保证内存操作的速度与稳定性。
-- 🛠️ **简洁易用**：提供简单直观的 API，快速上手，无需繁琐配置。
+- 🟦 **纯 Go 实现**：无需依赖其他语言或复杂环境。
+- 📱 **安卓支持**：基于 Linux `/proc` 机制。
+- ⚡ **多种读写模式**：`/proc/<pid>/mem` 与 `process_vm_readv/writev`（失败可回退）。
+- 🧭 **maps 解析 + 区段标注**：解析 `/proc/<pid>/maps`，区分 heap/stack/java 等。
+- 🔎 **搜索工具**：字节/AOB 搜索、数值类型搜索与范围过滤。
+- 🚀 **并发扫描**：支持 worker 并行扫描与进度回调。
 
 ---
 
 ## 🧩 主要功能
 
-- 读取指定进程内存
-- 修改内存数据（支持多种数据类型）
-- 查找、定位内存区域
-- 支持权限提升与安全性验证
+- 读取/写入指定进程内存
+- 解析与筛选 maps，支持模块基址查询
+- 搜索与精炼结果，支持集合操作
+- 指针链解析（动态地址）
 
 ---
 
@@ -37,11 +39,26 @@ go get github.com/pwh-pwh/memkit
 ## 🚀 快速开始
 
 ```go
-import "github.com/pwh-pwh/memkit"
+import "github.com/pwh-pwh/memkit/memory"
 
 func main() {
-    // 示例：读取指定进程的内存
-    //todo
+    pid := 1234
+    proc := memory.NewProcess(pid)
+    defer proc.Close()
+
+    // 读取值
+    v, _ := memory.ReadValFromProcess[int32](proc, 0x12345678)
+    _ = v
+
+    // 获取模块基址
+    base, _ := proc.ModuleBase("libil2cpp.so")
+    _ = base
+
+    // AOB 搜索
+    s := memory.NewSearcher(proc)
+    s.Workers = 4
+    addrs, _ := s.SearchPattern("12 34 ?? 56")
+    _ = addrs
 }
 ```
 

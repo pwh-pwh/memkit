@@ -12,19 +12,21 @@ memkit is a lightweight and efficient memory framework written in Go, designed f
 
 ## ✨ Features
 
-- 🟦 **Pure Go Implementation**: No dependency on other languages or complex environments. Simple to integrate and deploy.
-- 📱 **Android Support**: Tailored for Android, compatible with mainstream devices and OS versions.
-- ⚡ **High Performance**: Optimized for mobile, ensuring fast and stable memory operations.
-- 🛠️ **Easy to Use**: Straightforward API for quick integration, minimal configuration required.
+- 🟦 **Pure Go Implementation**: No dependency on other languages or complex environments.
+- 📱 **Android Support**: Tailored for Android (Linux `/proc` based).
+- ⚡ **Multiple Read/Write Modes**: `/proc/<pid>/mem` and `process_vm_readv/writev` (with fallback).
+- 🧭 **Maps Parsing + Range Tags**: Parse `/proc/<pid>/maps`, classify ranges (heap/stack/java/etc.).
+- 🔎 **Search Toolkit**: Bytes/AOB search, typed number search, and range filters.
+- 🚀 **Concurrent Scanning**: Worker-based scanning with progress callbacks.
 
 ---
 
 ## 🧩 Main Functions
 
-- Read memory from specified processes
-- Modify memory data (supports multiple data types)
-- Search and locate memory regions
-- Support for privilege elevation and security validation
+- Read and write memory from specified processes
+- Parse and filter memory maps; query module base addresses
+- Search values/patterns; refine results; set operations on result sets
+- Resolve pointer chains for dynamic addresses
 
 ---
 
@@ -39,11 +41,26 @@ go get github.com/pwh-pwh/memkit
 ## 🚀 Quick Start
 
 ```go
-import "github.com/pwh-pwh/memkit"
+import "github.com/pwh-pwh/memkit/memory"
 
 func main() {
-    // Example: Read memory from a specific process
-    // todo
+    pid := 1234
+    proc := memory.NewProcess(pid)
+    defer proc.Close()
+
+    // Read a value
+    v, _ := memory.ReadValFromProcess[int32](proc, 0x12345678)
+    _ = v
+
+    // Get module base
+    base, _ := proc.ModuleBase("libil2cpp.so")
+    _ = base
+
+    // Search bytes / AOB
+    s := memory.NewSearcher(proc)
+    s.Workers = 4
+    addrs, _ := s.SearchPattern("12 34 ?? 56")
+    _ = addrs
 }
 ```
 
