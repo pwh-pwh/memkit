@@ -417,3 +417,162 @@ func compareOrderFloat64(a, b float64) int {
 		return 0
 	}
 }
+
+func RefineAddresses(addrs []int64, fn func(int64) (bool, error)) ([]int64, error) {
+	if len(addrs) == 0 {
+		return nil, nil
+	}
+	if fn == nil {
+		return nil, fmt.Errorf("refine function is nil")
+	}
+	var out []int64
+	for _, addr := range addrs {
+		ok, err := fn(addr)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, addr)
+		}
+	}
+	return out, nil
+}
+
+func RefineNumber[T any](s *Searcher, addrs []int64, target T, op CompareOp) ([]int64, error) {
+	if s == nil || s.Process == nil {
+		return nil, fmt.Errorf("process is nil")
+	}
+	size, err := numericSize(target)
+	if err != nil {
+		return nil, err
+	}
+	return RefineAddresses(addrs, func(addr int64) (bool, error) {
+		buf := make([]byte, size)
+		if err := s.Process.Read(addr, buf); err != nil {
+			return false, nil
+		}
+		return matchNumber(buf, target, op)
+	})
+}
+
+func RefineNumberRange[T any](s *Searcher, addrs []int64, min, max T, includeMin, includeMax bool) ([]int64, error) {
+	if s == nil || s.Process == nil {
+		return nil, fmt.Errorf("process is nil")
+	}
+	minSize, err := numericSize(min)
+	if err != nil {
+		return nil, err
+	}
+	maxSize, err := numericSize(max)
+	if err != nil {
+		return nil, err
+	}
+	if minSize != maxSize {
+		return nil, fmt.Errorf("range type mismatch")
+	}
+	cmp, err := compareValues(min, max)
+	if err != nil {
+		return nil, err
+	}
+	if cmp > 0 {
+		return nil, fmt.Errorf("min greater than max")
+	}
+
+	return RefineAddresses(addrs, func(addr int64) (bool, error) {
+		buf := make([]byte, minSize)
+		if err := s.Process.Read(addr, buf); err != nil {
+			return false, nil
+		}
+		okMin, err := matchNumber(buf, min, rangeMinOp(&includeMin))
+		if err != nil || !okMin {
+			return okMin, err
+		}
+		return matchNumber(buf, max, rangeMaxOp(&includeMax))
+	})
+}
+
+func RefineBytes(s *Searcher, addrs []int64, target []byte) ([]int64, error) {
+	if s == nil || s.Process == nil {
+		return nil, fmt.Errorf("process is nil")
+	}
+	if len(target) == 0 {
+		return nil, fmt.Errorf("target is empty")
+	}
+	return RefineAddresses(addrs, func(addr int64) (bool, error) {
+		buf := make([]byte, len(target))
+		if err := s.Process.Read(addr, buf); err != nil {
+			return false, nil
+		}
+		return bytes.Equal(buf, target), nil
+	})
+}
+
+func AddressesUnion(a, b []int64) []int64 {
+	if len(a) == 0 {
+		return append([]int64(nil), b...)
+	}
+	if len(b) == 0 {
+		return append([]int64(nil), a...)
+	}
+	seen := make(map[int64]struct{}, len(a)+len(b))
+	var out []int64
+	for _, addr := range a {
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	for _, addr := range b {
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	return out
+}
+
+func AddressesIntersect(a, b []int64) []int64 {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+	setB := make(map[int64]struct{}, len(b))
+	for _, addr := range b {
+		setB[addr] = struct{}{}
+	}
+	var out []int64
+	seen := make(map[int64]struct{}, len(a))
+	for _, addr := range a {
+		if _, ok := setB[addr]; !ok {
+			continue
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	return out
+}
+
+func AddressesDiff(a, b []int64) []int64 {
+	if len(a) == 0 {
+		return nil
+	}
+	if len(b) == 0 {
+		return append([]int64(nil), a...)
+	}
+	setB := make(map[int64]struct{}, len(b))
+	for _, addr := range b {
+		setB[addr] = struct{}{}
+	}
+	var out []int64
+	for _, addr := range a {
+		if _, ok := setB[addr]; ok {
+			continue
+		}
+		out = append(out, addr)
+	}
+	return out
+}
