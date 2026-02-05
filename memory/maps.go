@@ -22,6 +22,16 @@ type MapEntry struct {
 	Path       string
 }
 
+type MapFilter struct {
+	RequireReadable   bool
+	RequireWritable   bool
+	RequireExecutable bool
+	RequirePrivate    bool
+	PathContains      string
+	MinStart          int64
+	MaxEnd            int64
+}
+
 func ParseMaps(pid int) ([]MapEntry, error) {
 	path := fmt.Sprintf("/proc/%d/maps", pid)
 	file, err := os.Open(path)
@@ -95,6 +105,38 @@ func GetModuleBase(pid int, name string) (int64, error) {
 		}
 	}
 	return -1, fmt.Errorf("module not found: %s", name)
+}
+
+func FilterMaps(entries []MapEntry, filter MapFilter) []MapEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	var out []MapEntry
+	for _, entry := range entries {
+		if filter.RequireReadable && !entry.Readable {
+			continue
+		}
+		if filter.RequireWritable && !entry.Writable {
+			continue
+		}
+		if filter.RequireExecutable && !entry.Executable {
+			continue
+		}
+		if filter.RequirePrivate && !entry.Private {
+			continue
+		}
+		if filter.PathContains != "" && !strings.Contains(entry.Path, filter.PathContains) {
+			continue
+		}
+		if filter.MinStart != 0 && entry.Start < filter.MinStart {
+			continue
+		}
+		if filter.MaxEnd != 0 && entry.End > filter.MaxEnd {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func parseAddressRange(addr string) (int64, int64, error) {

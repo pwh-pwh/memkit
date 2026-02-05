@@ -97,6 +97,14 @@ func (p *Process) Maps() ([]MapEntry, error) {
 	return ParseMaps(p.PID)
 }
 
+func (p *Process) FilteredMaps(filter MapFilter) ([]MapEntry, error) {
+	entries, err := p.Maps()
+	if err != nil {
+		return nil, err
+	}
+	return FilterMaps(entries, filter), nil
+}
+
 func (p *Process) ModuleBase(name string) (int64, error) {
 	return GetModuleBase(p.PID, name)
 }
