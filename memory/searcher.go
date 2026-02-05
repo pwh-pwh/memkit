@@ -107,6 +107,14 @@ func (s *Searcher) SearchBytes(target []byte) ([]int64, error) {
 	})
 }
 
+func SearchNumberSliding[T any](s *Searcher, target T, op CompareOp) ([]int64, error) {
+	return searchNumberSlidingWithOp(s, target, op, nil, nil)
+}
+
+func SearchNumberRangeSliding[T any](s *Searcher, min, max T, includeMin, includeMax bool) ([]int64, error) {
+	return searchNumberSlidingWithOp(s, min, rangeMinOp(&includeMin), &max, &includeMax)
+}
+
 func (s *Searcher) SearchPattern(pattern string) ([]int64, error) {
 	if s == nil || s.Process == nil {
 		return nil, fmt.Errorf("process is nil")
@@ -220,6 +228,83 @@ func SearchNumberRange[T any](s *Searcher, min, max T, includeMin, includeMax bo
 	return searchNumberWithOp(s, min, rangeMinOp(&includeMin), &max, &includeMax)
 }
 
+func searchNumberSlidingWithOp[T any](s *Searcher, target T, op CompareOp, max *T, includeMax *bool) ([]int64, error) {
+	if s == nil || s.Process == nil {
+		return nil, fmt.Errorf("process is nil")
+	}
+
+	typeSize, err := numericSize(target)
+	if err != nil {
+		return nil, err
+	}
+	if max != nil {
+		maxSize, err := numericSize(*max)
+		if err != nil {
+			return nil, err
+		}
+		if maxSize != typeSize {
+			return nil, fmt.Errorf("range type mismatch")
+		}
+		cmp, err := compareValues(target, *max)
+		if err != nil {
+			return nil, err
+		}
+		if cmp > 0 {
+			return nil, fmt.Errorf("min greater than max")
+		}
+	}
+
+	entries, err := s.Process.FilteredMaps(s.Filter)
+	if err != nil {
+		return nil, err
+	}
+
+	total := totalBytes(entries)
+	return s.searchEntries(entries, total, func(entry MapEntry) ([]int64, error) {
+		if !entry.Readable {
+			return nil, nil
+		}
+		var results []int64
+		for addr := entry.Start; addr < entry.End; {
+			remaining := entry.End - addr
+			readSize := int64(s.chunkSize(typeSize))
+			if remaining < readSize {
+				readSize = remaining
+			}
+			if readSize <= 0 {
+				break
+			}
+
+			buf := make([]byte, int(readSize))
+			if err := s.Process.Read(addr, buf); err != nil {
+				break
+			}
+			s.reportProgress(readSize, total)
+
+			for i := 0; i+typeSize <= len(buf); i++ {
+				match, err := matchNumber(buf[i:i+typeSize], target, op)
+				if err != nil {
+					return nil, err
+				}
+				if match && max != nil {
+					rmatch, err := matchNumber(buf[i:i+typeSize], *max, rangeMaxOp(includeMax))
+					if err != nil {
+						return nil, err
+					}
+					if !rmatch {
+						continue
+					}
+				}
+				if match {
+					results = append(results, addr+int64(i))
+				}
+			}
+
+			addr += readSize
+		}
+		return results, nil
+	})
+}
 func searchNumberWithOp[T any](s *Searcher, target T, op CompareOp, max *T, includeMax *bool) ([]int64, error) {
 	if s == nil || s.Process == nil {
 		return nil, fmt.Errorf("process is nil")
