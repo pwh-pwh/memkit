@@ -5,15 +5,20 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
 const defaultChunkSize = 1 << 20
 
 type Searcher struct {
-	Process   *Process
-	Filter    MapFilter
-	ChunkSize int
+	Process         *Process
+	Filter          MapFilter
+	ChunkSize       int
+	Workers         int
+	OnProgress      func(done, total int64)
+	progressCounter int64
 }
 
 func NewSearcher(p *Process) *Searcher {
@@ -42,15 +47,14 @@ func (s *Searcher) SearchBytes(target []byte) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	var results []int64
-	overlap := len(target) - 1
-
-	for _, entry := range entries {
+	total := totalBytes(entries)
+	return s.searchEntries(entries, total, func(entry MapEntry) ([]int64, error) {
 		if !entry.Readable {
-			continue
+			return nil, nil
 		}
 
+		var results []int64
+		overlap := len(target) - 1
 		var prev []byte
 		for addr := entry.Start; addr < entry.End; {
 			remaining := entry.End - addr
@@ -66,6 +70,7 @@ func (s *Searcher) SearchBytes(target []byte) ([]int64, error) {
 			if err := s.Process.Read(addr, buf); err != nil {
 				break
 			}
+			s.reportProgress(readSize, total)
 
 			searchBuf := buf
 			baseAddr := addr
@@ -98,9 +103,8 @@ func (s *Searcher) SearchBytes(target []byte) ([]int64, error) {
 
 			addr += readSize
 		}
-	}
-
-	return results, nil
+		return results, nil
+	})
 }
 
 func (s *Searcher) SearchPattern(pattern string) ([]int64, error) {
@@ -124,15 +128,14 @@ func (s *Searcher) SearchPattern(pattern string) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	var results []int64
-	overlap := len(pat.Bytes) - 1
-
-	for _, entry := range entries {
+	total := totalBytes(entries)
+	return s.searchEntries(entries, total, func(entry MapEntry) ([]int64, error) {
 		if !entry.Readable {
-			continue
+			return nil, nil
 		}
 
+		var results []int64
+		overlap := len(pat.Bytes) - 1
 		var prev []byte
 		for addr := entry.Start; addr < entry.End; {
 			remaining := entry.End - addr
@@ -148,6 +151,7 @@ func (s *Searcher) SearchPattern(pattern string) ([]int64, error) {
 			if err := s.Process.Read(addr, buf); err != nil {
 				break
 			}
+			s.reportProgress(readSize, total)
 
 			searchBuf := buf
 			baseAddr := addr
@@ -175,9 +179,8 @@ func (s *Searcher) SearchPattern(pattern string) ([]int64, error) {
 
 			addr += readSize
 		}
-	}
-
-	return results, nil
+		return results, nil
+	})
 }
 
 func SearchValue[T any](s *Searcher, val T) ([]int64, error) {
@@ -247,12 +250,12 @@ func searchNumberWithOp[T any](s *Searcher, target T, op CompareOp, max *T, incl
 	if err != nil {
 		return nil, err
 	}
-
-	var results []int64
-	for _, entry := range entries {
+	total := totalBytes(entries)
+	return s.searchEntries(entries, total, func(entry MapEntry) ([]int64, error) {
 		if !entry.Readable {
-			continue
+			return nil, nil
 		}
+		var results []int64
 		for addr := entry.Start; addr < entry.End; {
 			remaining := entry.End - addr
 			readSize := int64(s.chunkSize(typeSize))
@@ -267,6 +270,7 @@ func searchNumberWithOp[T any](s *Searcher, target T, op CompareOp, max *T, incl
 			if err := s.Process.Read(addr, buf); err != nil {
 				break
 			}
+			s.reportProgress(readSize, total)
 
 			for i := 0; i+typeSize <= len(buf); i += typeSize {
 				match, err := matchNumber(buf[i:i+typeSize], target, op)
@@ -274,7 +278,6 @@ func searchNumberWithOp[T any](s *Searcher, target T, op CompareOp, max *T, incl
 					return nil, err
 				}
 				if match && max != nil {
-					// Range check: value <= max (or < max)
 					rmatch, err := matchNumber(buf[i:i+typeSize], *max, rangeMaxOp(includeMax))
 					if err != nil {
 						return nil, err
@@ -290,8 +293,8 @@ func searchNumberWithOp[T any](s *Searcher, target T, op CompareOp, max *T, incl
 
 			addr += readSize
 		}
-	}
-	return results, nil
+		return results, nil
+	})
 }
 
 func (s *Searcher) chunkSize(typeSize int) int {
@@ -664,4 +667,91 @@ func AddressesDiff(a, b []int64) []int64 {
 		out = append(out, addr)
 	}
 	return out
+}
+
+func (s *Searcher) searchEntries(entries []MapEntry, total int64, fn func(MapEntry) ([]int64, error)) ([]int64, error) {
+	if s == nil {
+		return nil, fmt.Errorf("searcher is nil")
+	}
+	atomic.StoreInt64(&s.progressCounter, 0)
+	if s.Workers <= 1 {
+		var results []int64
+		for _, entry := range entries {
+			part, err := fn(entry)
+			if err != nil {
+				return nil, err
+			}
+			results = append(results, part...)
+		}
+		return results, nil
+	}
+
+	jobs := make(chan MapEntry)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var results []int64
+	var firstErr error
+
+	workers := s.Workers
+	if workers < 1 {
+		workers = 1
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for entry := range jobs {
+				mu.Lock()
+				err := firstErr
+				mu.Unlock()
+				if err != nil {
+					continue
+				}
+				part, err := fn(entry)
+				if err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					continue
+				}
+				if len(part) == 0 {
+					continue
+				}
+				mu.Lock()
+				results = append(results, part...)
+				mu.Unlock()
+			}
+		}()
+	}
+
+	for _, entry := range entries {
+		jobs <- entry
+	}
+	close(jobs)
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return results, nil
+}
+
+func totalBytes(entries []MapEntry) int64 {
+	var total int64
+	for _, entry := range entries {
+		if entry.End > entry.Start {
+			total += entry.End - entry.Start
+		}
+	}
+	return total
+}
+
+func (s *Searcher) reportProgress(delta, total int64) {
+	if s.OnProgress == nil || total <= 0 {
+		return
+	}
+	done := atomic.AddInt64(&s.progressCounter, delta)
+	s.OnProgress(done, total)
 }
