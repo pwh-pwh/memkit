@@ -191,6 +191,42 @@ func (s *Searcher) SearchPattern(pattern string) ([]int64, error) {
 	})
 }
 
+func (s *Searcher) SearchAndPatchPattern(pattern string, replacement []byte) ([]int64, error) {
+	if s == nil || s.Process == nil {
+		return nil, fmt.Errorf("process is nil")
+	}
+	pat, err := ParsePattern(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if len(pat.Bytes) == 0 {
+		return nil, fmt.Errorf("pattern is empty")
+	}
+	if len(replacement) != len(pat.Bytes) {
+		return nil, fmt.Errorf("replacement length mismatch")
+	}
+
+	addrs, err := s.SearchPattern(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, nil
+	}
+
+	for _, addr := range addrs {
+		buf := make([]byte, len(pat.Bytes))
+		if err := s.Process.Read(addr, buf); err != nil {
+			return nil, err
+		}
+		applyPatternMask(buf, replacement, pat.Mask)
+		if err := s.Process.Write(addr, buf); err != nil {
+			return nil, err
+		}
+	}
+	return addrs, nil
+}
+
 func SearchValue[T any](s *Searcher, val T) ([]int64, error) {
 	size := unsafe.Sizeof(val)
 	buf := unsafe.Slice((*byte)(unsafe.Pointer(&val)), size)
@@ -207,6 +243,14 @@ func matchPattern(buf, pat []byte, mask []bool) bool {
 		}
 	}
 	return true
+}
+
+func applyPatternMask(dst, replacement []byte, mask []bool) {
+	for i := 0; i < len(mask); i++ {
+		if mask[i] {
+			dst[i] = replacement[i]
+		}
+	}
 }
 
 type CompareOp int
