@@ -19,12 +19,15 @@ type Process struct {
 	PID  int
 	mode MemoryMode
 	mem  *os.File
+
+	FallbackToMem bool
 }
 
 func NewProcess(pid int) *Process {
 	return &Process{
-		PID:  pid,
-		mode: ModeMemFile,
+		PID:           pid,
+		mode:          ModeMemFile,
+		FallbackToMem: true,
 	}
 }
 
@@ -48,19 +51,15 @@ func (p *Process) Close() error {
 func (p *Process) Read(addr int64, buf []byte) error {
 	switch p.mode {
 	case ModeMemFile:
-		if err := p.openMem(); err != nil {
+		return p.readMem(addr, buf)
+	case ModeSyscall:
+		if err := readBySyscall(p.PID, addr, buf); err != nil {
+			if p.FallbackToMem {
+				return p.readMem(addr, buf)
+			}
 			return err
 		}
-		n, err := p.mem.ReadAt(buf, addr)
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("failed to read memory: %w", err)
-		}
-		if n != len(buf) {
-			return fmt.Errorf("failed to read memory: short read %d/%d", n, len(buf))
-		}
 		return nil
-	case ModeSyscall:
-		return readBySyscall(p.PID, addr, buf)
 	case ModeDirect:
 		copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(uintptr(addr))), len(buf)))
 		return nil
@@ -72,19 +71,15 @@ func (p *Process) Read(addr int64, buf []byte) error {
 func (p *Process) Write(addr int64, data []byte) error {
 	switch p.mode {
 	case ModeMemFile:
-		if err := p.openMem(); err != nil {
+		return p.writeMem(addr, data)
+	case ModeSyscall:
+		if err := writeBySyscall(p.PID, addr, data); err != nil {
+			if p.FallbackToMem {
+				return p.writeMem(addr, data)
+			}
 			return err
 		}
-		n, err := p.mem.WriteAt(data, addr)
-		if err != nil {
-			return fmt.Errorf("failed to write memory: %w", err)
-		}
-		if n != len(data) {
-			return fmt.Errorf("failed to write memory: short write %d/%d", n, len(data))
-		}
 		return nil
-	case ModeSyscall:
-		return writeBySyscall(p.PID, addr, data)
 	case ModeDirect:
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(uintptr(addr))), len(data)), data)
 		return nil
@@ -119,6 +114,34 @@ func (p *Process) openMem() error {
 		return fmt.Errorf("failed to open memory file: %w", err)
 	}
 	p.mem = file
+	return nil
+}
+
+func (p *Process) readMem(addr int64, buf []byte) error {
+	if err := p.openMem(); err != nil {
+		return err
+	}
+	n, err := p.mem.ReadAt(buf, addr)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read memory: %w", err)
+	}
+	if n != len(buf) {
+		return fmt.Errorf("failed to read memory: short read %d/%d", n, len(buf))
+	}
+	return nil
+}
+
+func (p *Process) writeMem(addr int64, data []byte) error {
+	if err := p.openMem(); err != nil {
+		return err
+	}
+	n, err := p.mem.WriteAt(data, addr)
+	if err != nil {
+		return fmt.Errorf("failed to write memory: %w", err)
+	}
+	if n != len(data) {
+		return fmt.Errorf("failed to write memory: short write %d/%d", n, len(data))
+	}
 	return nil
 }
 
