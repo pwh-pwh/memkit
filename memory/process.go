@@ -60,7 +60,7 @@ func (p *Process) Read(addr int64, buf []byte) error {
 		}
 		return nil
 	case ModeSyscall:
-		return fmt.Errorf("syscall mode not implemented")
+		return readBySyscall(p.PID, addr, buf)
 	case ModeDirect:
 		copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(uintptr(addr))), len(buf)))
 		return nil
@@ -84,7 +84,7 @@ func (p *Process) Write(addr int64, data []byte) error {
 		}
 		return nil
 	case ModeSyscall:
-		return fmt.Errorf("syscall mode not implemented")
+		return writeBySyscall(p.PID, addr, data)
 	case ModeDirect:
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(uintptr(addr))), len(data)), data)
 		return nil
