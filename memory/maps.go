@@ -20,6 +20,50 @@ type MapEntry struct {
 	Device     string
 	Inode      uint64
 	Path       string
+	Range      RangeType
+}
+
+type RangeType int
+
+const (
+	RangeUnknown RangeType = iota
+	RangeStack
+	RangeHeap
+	RangeJava
+	RangeAnon
+	RangeAshmem
+	RangeDevice
+	RangeCode
+	RangeFile
+	RangeVdso
+	RangeVvar
+)
+
+func (r RangeType) String() string {
+	switch r {
+	case RangeStack:
+		return "stack"
+	case RangeHeap:
+		return "heap"
+	case RangeJava:
+		return "java"
+	case RangeAnon:
+		return "anon"
+	case RangeAshmem:
+		return "ashmem"
+	case RangeDevice:
+		return "device"
+	case RangeCode:
+		return "code"
+	case RangeFile:
+		return "file"
+	case RangeVdso:
+		return "vdso"
+	case RangeVvar:
+		return "vvar"
+	default:
+		return "unknown"
+	}
 }
 
 type MapFilter struct {
@@ -83,6 +127,7 @@ func ParseMaps(pid int) ([]MapEntry, error) {
 			Inode:      inode,
 			Path:       pathname,
 		}
+		entry.Range = DetermineRange(entry)
 		entries = append(entries, entry)
 	}
 	if err := scanner.Err(); err != nil {
@@ -105,6 +150,37 @@ func GetModuleBase(pid int, name string) (int64, error) {
 		}
 	}
 	return -1, fmt.Errorf("module not found: %s", name)
+}
+
+func DetermineRange(entry MapEntry) RangeType {
+	path := entry.Path
+	switch {
+	case path == "[stack]":
+		return RangeStack
+	case path == "[heap]":
+		return RangeHeap
+	case path == "[vdso]":
+		return RangeVdso
+	case path == "[vvar]":
+		return RangeVvar
+	}
+
+	if strings.Contains(path, "dalvik") || strings.Contains(path, "art") || strings.Contains(path, "jit-cache") || strings.Contains(path, "zygote") {
+		return RangeJava
+	}
+	if strings.Contains(path, "/dev/ashmem") {
+		return RangeAshmem
+	}
+	if strings.HasPrefix(path, "/dev/") {
+		return RangeDevice
+	}
+	if path == "" {
+		return RangeAnon
+	}
+	if entry.Executable {
+		return RangeCode
+	}
+	return RangeFile
 }
 
 func FilterMaps(entries []MapEntry, filter MapFilter) []MapEntry {
