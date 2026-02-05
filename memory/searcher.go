@@ -103,10 +103,99 @@ func (s *Searcher) SearchBytes(target []byte) ([]int64, error) {
 	return results, nil
 }
 
+func (s *Searcher) SearchPattern(pattern string) ([]int64, error) {
+	if s == nil || s.Process == nil {
+		return nil, fmt.Errorf("process is nil")
+	}
+	pat, err := ParsePattern(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if len(pat.Bytes) == 0 {
+		return nil, fmt.Errorf("pattern is empty")
+	}
+
+	chunkSize := s.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = defaultChunkSize
+	}
+
+	entries, err := s.Process.FilteredMaps(s.Filter)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []int64
+	overlap := len(pat.Bytes) - 1
+
+	for _, entry := range entries {
+		if !entry.Readable {
+			continue
+		}
+
+		var prev []byte
+		for addr := entry.Start; addr < entry.End; {
+			remaining := entry.End - addr
+			readSize := int64(chunkSize)
+			if remaining < readSize {
+				readSize = remaining
+			}
+			if readSize <= 0 {
+				break
+			}
+
+			buf := make([]byte, int(readSize))
+			if err := s.Process.Read(addr, buf); err != nil {
+				break
+			}
+
+			searchBuf := buf
+			baseAddr := addr
+			if len(prev) > 0 {
+				combined := make([]byte, len(prev)+len(buf))
+				copy(combined, prev)
+				copy(combined[len(prev):], buf)
+				searchBuf = combined
+				baseAddr = addr - int64(len(prev))
+			}
+
+			for i := 0; i+len(pat.Bytes) <= len(searchBuf); i++ {
+				if matchPattern(searchBuf[i:], pat.Bytes, pat.Mask) {
+					results = append(results, baseAddr+int64(i))
+				}
+			}
+
+			if overlap > 0 {
+				if len(buf) >= overlap {
+					prev = append(prev[:0], buf[len(buf)-overlap:]...)
+				} else {
+					prev = append(prev[:0], buf...)
+				}
+			}
+
+			addr += readSize
+		}
+	}
+
+	return results, nil
+}
+
 func SearchValue[T any](s *Searcher, val T) ([]int64, error) {
 	size := unsafe.Sizeof(val)
 	buf := unsafe.Slice((*byte)(unsafe.Pointer(&val)), size)
 	return s.SearchBytes(buf)
+}
+
+func matchPattern(buf, pat []byte, mask []bool) bool {
+	if len(pat) == 0 {
+		return false
+	}
+	for i := 0; i < len(pat); i++ {
+		if mask[i] && buf[i] != pat[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type CompareOp int
