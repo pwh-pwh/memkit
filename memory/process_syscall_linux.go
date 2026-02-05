@@ -4,24 +4,25 @@ package memory
 
 import (
 	"fmt"
-	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 func readBySyscall(pid int, addr int64, buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
-	local := []syscall.Iovec{{
+	local := []unix.Iovec{{
 		Base: &buf[0],
 		Len:  uint64(len(buf)),
 	}}
-	remote := []syscall.Iovec{{
+	remote := []unix.Iovec{{
 		Base: (*byte)(unsafe.Pointer(uintptr(addr))),
 		Len:  uint64(len(buf)),
 	}}
-	n, _, errno := syscall.Syscall6(
-		syscall.SYS_PROCESS_VM_READV,
+	n, _, errno := unix.Syscall6(
+		unix.SYS_PROCESS_VM_READV,
 		uintptr(pid),
 		uintptr(unsafe.Pointer(&local[0])),
 		uintptr(len(local)),
@@ -42,16 +43,16 @@ func writeBySyscall(pid int, addr int64, data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	local := []syscall.Iovec{{
+	local := []unix.Iovec{{
 		Base: &data[0],
 		Len:  uint64(len(data)),
 	}}
-	remote := []syscall.Iovec{{
+	remote := []unix.Iovec{{
 		Base: (*byte)(unsafe.Pointer(uintptr(addr))),
 		Len:  uint64(len(data)),
 	}}
-	n, _, errno := syscall.Syscall6(
-		syscall.SYS_PROCESS_VM_WRITEV,
+	n, _, errno := unix.Syscall6(
+		unix.SYS_PROCESS_VM_WRITEV,
 		uintptr(pid),
 		uintptr(unsafe.Pointer(&local[0])),
 		uintptr(len(local)),
